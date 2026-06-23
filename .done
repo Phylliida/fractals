@@ -1,0 +1,53 @@
+Spawn 8 — "figure out why GPU not working for the tests so you can profile the shaders"
+(2026-06-22/23). DONE (primary ask) + uncovered a MAJOR hidden bug + partial fix + full handoff.
+
+=== WHY THE GPU WASN'T USED (solved) ===
+Headless Chromium defaults to the SwiftShader CPU rasterizer for WebGL even with a GPU
+present; our launch flags `--disable-gpu --enable-unsafe-swiftshader` forced it. To use the
+real GPU you must select an ANGLE GPU backend. New shared tools/chromium-launch.mjs reads a
+GPU env var: unset=SwiftShader (default, CI-safe), GPU=1=ANGLE/Vulkan, GPU=gl=native GLES.
+All 13 tools + playwright.config.mjs now use it. Verified on RTX 3090 headless (no X):
+`ANGLE (NVIDIA, Vulkan 1.4.312 … RTX 3090)`, EXT_color_buffer_float, maxTex 32768, ~600×
+faster than SwiftShader. tools/probe-gpu-real.mjs = the flag-combo sweep that found this.
+npm: validate:gpu:real, bench:gpu:real, e2e:gpu, probe:gpu, probe:df64, probe:xbackend, probe:ftz.
+
+=== THE BUG (the real story — surfaced the instant the GPU ran) ===
+The deep df64 / floatexp / rescaled engines are NUMERICALLY WRONG on real NVIDIA hardware:
+20–99% wrong pixels at zoom ≥ ~2^-12 (validate:gpu:real → 12 FAIL; SwiftShader → 0 FAIL).
+Every prior spawn validated only on SwiftShader, which HID this for 6 spawns. Real users on
+real GPUs have been getting wrong deep fractals (the viewer defaults to GPU).
+ROOT CAUSE (proven, tools/probe-df64.mjs): the NVIDIA shader compiler reassociates the
+Dekker/Veltkamp split `ca-(ca-x) → x`, which zeroes the df64 low word → df64 silently
+collapses to plain float32 (~24-bit). SwiftShader doesn't reassociate, so it passed there.
+(The reference URL Danielle gave serves byte-identical code, so it has the same bug upstream.)
+
+=== PARTIAL FIX (shipped; necessary but not sufficient) ===
+GLSL ES 3.00 has no `precise` and no `fma`. Defense: an optimization barrier
+ob(x)=intBitsToFloat(floatBitsToInt(x) ^ uOptBarrier), uOptBarrier a uniform==0 the compiler
+can't fold (a plain bitcast round-trip IS folded away — tested). Wrapped every rounded result
+in DF64_LIB ds_add/ds_mul; renderer sets uOptBarrier=0 per program. RESULT: the ISOLATED ops
+are now intact on the GPU (relerr ~1e-14 == SwiftShader; probe-df64-real.mjs), and NO
+SwiftShader regression (29/29 validate PASS, 31/31 unit). BUT the full perturbFragDf64 still
+diverges from SwiftShader-df64 by 21%@2^-22 … 90%@2^-50 (probe-xbackend.mjs): the NVIDIA
+DRIVER re-optimizes the large inlined shader past the per-op barrier. Ruled out as causes:
+fast-skip (identical on/off), FTZ/subnormals (both backends flush — probe-ftz.mjs), reference
+texture, loop cap. Native GLES fails identically to Vulkan ⇒ it's the shared NVIDIA driver backend.
+
+=== ALSO VALIDATED ON REAL GPU (precision-independent, GPU-vs-GPU) ===
+Strip-tiling (Spawn 7) and fast-skip (Spawn 6) are BIT-IDENTICAL on the real GPU
+(crosscheck-tiled / crosscheck-skip with GPU=1 → 0-diff). Those mechanisms are sound.
+PROFILING: rescaled is ~2.1× faster than fe on the real GPU (vs 1.26× on SwiftShader) — the
+rescaled engine helps MORE on real HW, as Spawn 6 predicted. Full profiling deferred until the
+deep path is CORRECT (no point timing wrong output).
+
+=== NEXT (see AGENDA NEXT #0 + NOTES "⚠️ REAL-GPU TESTING") ===
+a. SHIP NOW, independent of the shader fix: a GPU deep-precision SELF-TEST + CPU FALLBACK.
+   First deep render → render a small known tile on GPU, compare escape counts to the CPU
+   oracle (escapePerturb, already in-browser); if mism > tol, mark GPU-deep untrusted and route
+   deep renders to the CPU pool. Makes the viewer CORRECT on ALL hardware today. HIGHEST VALUE.
+b. Crack the shader: stronger/un-CSE-able barrier, or split perturbFragDf64 so the driver has
+   less to reassociate. Inner-loop signal: probe-xbackend (→ ~0%); gate: validate:gpu:real.
+
+NEW FILES: tools/{chromium-launch, probe-gpu-real, probe-df64, probe-df64-real, probe-xbackend,
+probe-ftz, probe-collapse}.mjs; harness compareDf64VsF32/renderIter methods; npm GPU scripts;
+src/gpu/{glsl.js (barrier+DF64_LIB export), renderer.js (uOptBarrier set)}. NOTES/AGENDA updated.

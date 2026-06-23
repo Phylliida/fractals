@@ -1,0 +1,29 @@
+{
+  "name": "mandelbrot-deepzoom",
+  "version": "0.1.0",
+  "description": "Mobile-first Mandelbrot deep-zoom viewer using perturbation theory",
+  "type": "module",
+  "scripts": {
+    "test": "node --test 'test/unit/*.test.mjs'",
+    "serve": "node tools/serve.mjs",
+    "e2e": "playwright test",
+    "e2e:headed": "playwright test --headed",
+    "validate:gpu": "node tools/validate-gpu.mjs",
+    "bench:gpu": "node tools/bench-gpu.mjs",
+    "crosscheck:skip": "node tools/crosscheck-skip.mjs",
+    "crosscheck:tiled": "node tools/crosscheck-tiled.mjs",
+    "probe:rescaled": "node tools/probe-rescaled.mjs",
+    "probe:deep218": "node tools/probe-deep218.mjs",
+    "smoke:gpu": "node tools/smoke-viewer.mjs",
+    "probe:gpu": "node tools/probe-gpu-real.mjs",
+    "probe:df64": "GPU=1 node tools/probe-df64.mjs",
+    "probe:ftz": "GPU=1 node tools/probe-ftz.mjs",
+    "probe:xbackend": "node tools/probe-xbackend.mjs",
+    "validate:gpu:real": "GPU=1 node tools/validate-gpu.mjs",
+    "bench:gpu:real": "GPU=1 node tools/bench-gpu.mjs",
+    "e2e:gpu": "GPU=1 playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.0"
+  }
+}
